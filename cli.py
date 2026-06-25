@@ -1,8 +1,15 @@
 import os
+from sqlite3 import IntegrityError
 import db
-from rich.console import Console
-from rich.table import Table
 from datetime import datetime
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich import box
+from rich import print as fprint
+
+
+#from dbm import sqlite3
 """
     Main menu loop — Add / View / Delete / Quit
     rich gives you colored tables and a nice layout with zero effort
@@ -33,18 +40,24 @@ from datetime import datetime
         remember you can do row["amount"] or dict(row), but row.amount (attribute access) won't work. 
         Useful for Rich tables since you can iterate columns by name
 """
+console = Console()
 #This is the single most useful pattern for a CLI — wrap it once as a helper and reuse it
-def prompt_int(label, default=None, get_id=False):
+def prompt_int(label, default=None, get_sid=False, get_cid=False):
     while True:
         raw = input(f"{label}{f' [{default}]' if default is not None else ''}: ").strip()
         if not raw and default is not None:
             return default
         try:
             x=int(raw)
-            if get_id:
+            if get_sid:
                 r = db.get_statements("id", x)
                 if not r:
                     print(f"Statement {x} doesn't exist")
+                    continue
+            if get_cid:
+                r = db.get_categories()
+                if not any(category["id"] == x for category in r):
+                    print(f"Category {x} doesn't exist")
                     continue
             return x
 
@@ -75,9 +88,15 @@ def prompt_choice(label, choices, default=None):
     #standardize to lowercase
     while True: 
         dmsg=f"(Hit `Enter` for '{default}')" if default is not None else ""
-        raw = input(f"{label} {dmsg}: [{f' {choices} ' if choices is not None else ''}]: ").strip().lower()  
-        if raw in (choice.lower() for choice in choices):
-            return raw
+        raw = input(f"{label} {dmsg}: [{f' {choices} ' if choices is not None else ''}]\n\t>").strip().lower()
+        #Multiple matches, single match, or no match
+        matches = [v for v in choices if raw and v.strip().lower().startswith(raw)]
+        print(f"DEBUG: raw='{raw}', matches={matches}")
+        if len(matches)==1:
+            print(f"DEBUG: single match found: {matches[0]}")
+            return matches[0]
+        elif len(matches)>1:
+            print("Multiple matches found:", matches)
         else:
             if raw=="" and default is not None:
                 return default.lower()
@@ -86,22 +105,21 @@ def type_choice():
     return prompt_choice("Type", ["expense", "income"])
 
 def prompt_category():
-    rows=db.get_categories_id()
+    rows=db.get_categories()
     names=tuple(tuple(row) for row in rows)
     while True:
         print("Categories:")
         for row in rows:
             print(f"\t{row['id']}: {row['name']}")
-        x=input("Select one (by name), or leave blank for none: ").strip().lower()
+        x=prompt_choice("Select one (by name), or leave blank for none", [row["name"] for row in rows], default="")
+        print(f"DEBUG: prompt_category() returned '{x}'")
+        for n in names:
+            print(f"DEBUG: comparing '{n[1]}' to '{x}': {n[1]==x}'")
         if not x:
             return None
-        #print(names)
         for tup in names:
-            #print(tup[1].lower().strip()==x)
-            if (tup[1].lower().strip()==x):
-                #print (int(tup[0]))
+            if (tup[1]==x):
                 return (int(tup[0]))
-        print("Select valid category.")
 
 def prompt_string(label, default=None):
     while True:
@@ -120,7 +138,7 @@ def handle_stmt_view():
     value=None
     match filter:
         case "id":
-            value=prompt_int("Enter ID number", get_id=True)
+            value=prompt_int("Enter ID number", get_sid=True)
         case "type":
             value=type_choice()
         case "month":
@@ -181,49 +199,76 @@ def handle_stmt_del():
         try:
             db.delete_statement(s_id)
             print("Deleted.")
-        except (TypeError, ValueError) as e:
+        except (TypeError, ValueError, IntegrityError) as e:
             print(e)
 def handle_categories():
     while True:
-        print("Options:\n\t1: View Categories\n\t2: Add Category\n\t3: Edit Category\n\t4: Delete Category\n\t5: Back")
+        fprint("Options:\n\t1: View Categories\n\t2: Add Category\n\t3: Edit Category\n\t4: Delete Category\n\t5: Back")
         choice=input(">").strip()
         match choice:
             case "1":
                 rows = db.get_categories()
-                for row in rows:
-                    print(f"{row['id']}: {row['name']}")
+                printRows(rows, "categories")
             case "2":
                 name=prompt_string("Enter category name.")
                 try:
                     db.add_category(name)
-                except (TypeError, ValueError) as e:
+                except (TypeError, ValueError, IntegrityError) as e:
                     print(e)
             case "3":
-                id=prompt_int("Enter category ID to edit", get_id=True)
+                id=prompt_int("Enter category ID to edit", get_cid=True)
+                #Allow user to enter a category name or go back to handle_categories menu
                 new_name=prompt_string("Enter new category name.")
                 try:
                     db.change_category(id, new_name)
-                except (TypeError, ValueError) as e:
+                except (TypeError, ValueError, IntegrityError) as e:
                     print(e)
             case "4":
-                id=prompt_int("Enter category ID to delete", get_id=True)
+                id=prompt_int("Enter category ID to delete", get_cid=True)
                 try:
                     db.delete_category(id)
-                except (TypeError, ValueError) as e:
+                except (TypeError, ValueError, IntegrityError) as e:
                     print(e)
             case "5":
                 break
             case _:
                 print("Please enter a valid number.")
 
-def printRows(rows):
+def printRows(rows, format="Statements"):
     if rows==None:
         raise TypeError("Row value is `None`.")
-    print([tuple(row) for row in rows])
+    if format.lower().strip()=="statements":
+        table=Table(title=format, title_style="bold magenta")
+        table.add_column("ID", justify="right", style="cyan")
+        table.add_column("Date")
+        table.add_column("Amount", justify="right")
+        table.add_column("Type")
+        table.add_column("Category", justify="center")
+        table.add_column("Description")
+        for row in rows:
+            amount_style = "green" if row["type"] == "income" else "red"
+            table.add_row(
+                str(row["id"]),
+                row["date"],
+                f"[{amount_style}]${row['amount']/100:.2f}[/{amount_style}]",
+                f"[{amount_style}]{row['type']}[/{amount_style}]",
+                row["name"] or "-",
+                row["description"] or "",
+            )
+        console.print(table)
+    elif format.lower().strip()=="categories":
+        table=Table(title=format)
+        table.add_column("ID", justify="right", style="cyan")
+        table.add_column("Name")
+        for row in rows:
+            table.add_row(str(row["id"]), row["name"])
+        console.print(table)
+    else:
+        print([tuple(row) for row in rows])
 #Main loop
 def main_menu():
     while True:
-        print("Options:\n\t1: View Statements\n\t2: Add Statement\n\t3: Edit Statement\n\t4: Delete Statement\n\t5: Categories\n\t6: Quit")
+        fprint("Options:\n\t1: View Statements\n\t2: Add Statement\n\t3: Edit Statement\n\t4: Delete Statement\n\t5: Categories\n\t6: Quit")
         choice=input(">").strip()
         match choice:
             case "1":
