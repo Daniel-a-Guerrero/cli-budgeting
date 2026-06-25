@@ -34,7 +34,7 @@ sql_statement={
     "select_all_cat":"""SELECT s.*, c.name
                         FROM statements as s
                         LEFT JOIN categories as c ON s.category = c.id""",
-    "select_one":"""SELECT * FROM statements WHERE s.id = ?""",
+    "select_one":"""SELECT s.* FROM statements AS s WHERE s.id = ?""",
     "select_one_cat":"""SELECT s.*, c.name 
                         FROM statements as s
                         LEFT JOIN categories as c ON s.category = c.id
@@ -87,13 +87,13 @@ def valid_category(x):
         return False
     return True
 
-def get_categories_id():
+def get_categories():
     with get_connection() as con:
         cursor=con.cursor()
         cursor.execute(sql_category["select_all"])
         categories=cursor.fetchall()
     return categories
-def get_categories():
+def get_categories_name():
     with get_connection() as con:
         cursor=con.cursor()
         cursor.execute(sql_category["select_names"])
@@ -109,6 +109,11 @@ def add_category(c_name):
     with get_connection() as con:
         cursor=con.cursor()
         try:
+            #checks if the name already exists, if it does, it will raise an IntegrityError
+            cursor.execute(sql_category["select_names"])
+            categories=cursor.fetchall()
+            if any(c_name == category["name"] for category in categories):
+                raise sqlite3.IntegrityError("Category already exists.")
             cursor.execute(sql_category["insert"], (c_name,))
             con.commit()
         except sqlite3.IntegrityError:
@@ -120,6 +125,10 @@ def change_category(c_id, c_name):
     with get_connection() as con:
         cursor=con.cursor()
         try:
+            cursor.execute(sql_category["select_names"])
+            categories=cursor.fetchall()
+            if any(c_name == category["name"] for category in categories):
+                raise sqlite3.IntegrityError("Category already exists.")
             cursor.execute(sql_category["modify"],(c_name,c_id,))
             con.commit()
         except sqlite3.IntegrityError:
@@ -155,7 +164,6 @@ def valid_date(date_str): #Determines if date is in proper format. Can be dateti
 
 def get_statements(field="", value=None):
     fields={"id":"select_one_cat", "type":"select_by_type", "month":"select_by_month", "category":"select_by_category"}
-    #print(field, value)
     with get_connection() as con:
         cursor=con.cursor()
         query="select_all_cat"
@@ -183,7 +191,6 @@ def get_statements(field="", value=None):
             value=(value,)
         else:
             value=()
-        #print(f"{sql_statement[query]},{value}")
         cursor.execute(sql_statement[query],value)
         statements=cursor.fetchall()
     return statements
@@ -252,12 +259,15 @@ def delete_statement(s_id):
 #Testing function
 def mainer():
     init_db()
-    x=get_categories()
+    y=get_statements()
+    print(f"Statements: {[tuple(row) for row in y]}") #in accordance with the row functionality
+    return
+    x=get_categories_name()
     print(f"Categories: {[tuple(row) for row in x]}") #in accordance with the row functionality
-    add_category("Being awesome.")
-    add_category("Energy and security")
-    add_category("The mob")
-    x=get_categories()
+    #add_category("Being awesome.")
+    #add_category("Energy and security")
+    #add_category("The mob")
+    x=get_categories_name()
     print(f"Categories: {[tuple(row) for row in x]}")
     #add_statement(s_amount=50000, s_category=2, s_desc="Willie the Wop visited my house about the gambling debt", s_type="expense")
     #change_statement(s_id=1, field="date", value="1945-4-30 16:00:00")
