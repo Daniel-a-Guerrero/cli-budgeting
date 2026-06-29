@@ -225,14 +225,19 @@ def handle_analytics():
         print("No statements to analyze.")
         return
     summary = analytics.monthly_summary(rows)
-    print(f"Monthly Summary:")
-    print(f"  Income: ${summary['income']/100:.2f}")
-    print(f"  Expense: ${summary['expense']/100:.2f}")
-    print(f"  Net: ${summary['net']/100:.2f}")
+    netColor="green" if summary["net"] >= 0 else "red"
+    table=Table(title="Monthly Summary", title_style="bold magenta")
+    table.add_column("Income")
+    table.add_column("Expense")
+    table.add_column("Net")
+    table.add_row(f"[green]${summary['income']/100:.2f}[/green]", f"[red]${summary['expense']/100:.2f}[red]", f"[{netColor}]${summary['net']/100:.2f}[/]")
+    console.print(table)
+
 
     sc = analytics.spending_by_category(rows)
-    for s in sc:
-        fprint(f"{s:<20} --> [red]-${sc[s]/100:.2f}[/red]")
+    fprint(Panel.fit(f"[red]Spending by Category[/red]\n" + "\n".join([f"{s:<20} --> [red]-${sc[s]/100:.2f}[/red]" for s in sc]), title=f"[bold purple]Spending by Category[/bold purple]", title_align="center"))
+    ic = analytics.income_by_category(rows)
+    fprint(Panel.fit(f"[green]Income by Category[/green]\n" + "\n".join([f"{i:<20} --> [green]+${ic[i]/100:.2f}[/green]" for i in ic]), title=f"[bold purple]Income by Category[/bold purple]", title_align="center"))
 def handle_export():
     rows = db.get_statements()
     if not rows:
