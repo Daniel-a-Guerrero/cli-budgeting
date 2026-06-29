@@ -24,3 +24,9 @@ def spending_by_category(rows):
         if r["type"] == "expense":
             totals[r["name"] or "Uncategorized"] += r["amount"]
     return dict(totals)
+def income_by_category(rows):
+    totals = defaultdict(int)
+    for r in rows:
+        if r["type"] == "income":
+            totals[r["name"] or "Uncategorized"] += r["amount"]
+    return dict(totals)
