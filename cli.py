@@ -1,15 +1,17 @@
 import os
 from sqlite3 import IntegrityError
+
 import db
+import analytics
+import export
 from datetime import datetime
 from rich.console import Console
+from rich.columns import Columns
 from rich.panel import Panel
 from rich.table import Table
+from rich.prompt import Prompt
 from rich import box
 from rich import print as fprint
-
-
-#from dbm import sqlite3
 """
     Main menu loop — Add / View / Delete / Quit
     rich gives you colored tables and a nice layout with zero effort
@@ -41,7 +43,7 @@ from rich import print as fprint
         Useful for Rich tables since you can iterate columns by name
 """
 console = Console()
-#This is the single most useful pattern for a CLI — wrap it once as a helper and reuse it
+column=Columns()
 def prompt_int(label, default=None, get_sid=False, get_cid=False):
     while True:
         raw = input(f"{label}{f' [{default}]' if default is not None else ''}: ").strip()
@@ -63,7 +65,7 @@ def prompt_int(label, default=None, get_sid=False, get_cid=False):
 
         except ValueError:
             print("Please enter a whole number.")
-#Write similar helpers for prompt_date, prompt_choice (menu selection), etc. This pays for itself fast.
+
 def prompt_date(label, default=None, format=None):
     if isinstance(format, str):
         format = format.lower().strip()
@@ -85,48 +87,61 @@ def prompt_date(label, default=None, format=None):
 def prompt_choice(label, choices, default=None):
     if not hasattr(choices, "__getitem__") or isinstance(choices,str):
         raise TypeError("Error: choices must be an indexable list, tuple, etc.")
+    choices_str = " | ".join(choices)
+    dmsg = f"\n[dim](Hit Enter for '{default}')[/dim]" if default is not None else ""
     #standardize to lowercase
     while True: 
         dmsg=f"(Hit `Enter` for '{default}')" if default is not None else ""
-        raw = input(f"{label} {dmsg}: [{f' {choices} ' if choices is not None else ''}]\n\t>").strip().lower()
+        console.print(Panel.fit(
+            f"[cyan bold]{choices_str}[/cyan bold]\t{dmsg}",
+            title=f"[bold purple]{label}[/bold purple]",
+            title_align="center"
+        ))
+        raw = input("> ").strip().lower()
         #Multiple matches, single match, or no match
         matches = [v for v in choices if raw and v.strip().lower().startswith(raw)]
-        print(f"DEBUG: raw='{raw}', matches={matches}")
+        #print(f"DEBUG: raw='{raw}', matches={matches}")
         if len(matches)==1:
-            print(f"DEBUG: single match found: {matches[0]}")
+            print(matches[0])
             return matches[0]
         elif len(matches)>1:
             print("Multiple matches found:", matches)
         else:
             if raw=="" and default is not None:
                 return default.lower()
+            elif default is None:
+                return default
             print("Must enter an item in the list")
 def type_choice():
     return prompt_choice("Type", ["expense", "income"])
 
 def prompt_category():
     rows=db.get_categories()
-    names=tuple(tuple(row) for row in rows)
+    names=[(row["id"], row["name"]) for row in rows]
     while True:
-        print("Categories:")
-        for row in rows:
-            print(f"\t{row['id']}: {row['name']}")
-        x=prompt_choice("Select one (by name), or leave blank for none", [row["name"] for row in rows], default="")
-        print(f"DEBUG: prompt_category() returned '{x}'")
-        for n in names:
-            print(f"DEBUG: comparing '{n[1]}' to '{x}': {n[1]==x}'")
+        rChoices=[row["name"] for row in rows]
+        x=prompt_choice("Categories:\nSelect one (by name), or leave blank for none", choices=rChoices, default=None)
         if not x:
             return None
         for tup in names:
-            if (tup[1]==x):
-                return (int(tup[0]))
+            if tup[1].lower() == x.lower():
+                return int(tup[0])
 
-def prompt_string(label, default=None):
+def prompt_string(label, default=None, file_path=False):
     while True:
-        raw = input(f"{label}{f' [{default}]' if default is not None else ''}: ").strip()
+        printBracket=default is not None and default.strip() != ""
+        raw = input(f"{label}{f' [{default}]' if printBracket else ''}: ").strip()
         if not raw and default is not None:
             return default
         try:
+            if not raw:
+                raise ValueError("Input cannot be empty.")
+            if file_path:
+                if os.path.exists(raw):
+                    overwrite = input(f"File '{raw}' already exists. Overwrite? (y/n): ").strip().lower()
+                    if overwrite != "y":
+                        continue
+                return os.path.abspath(raw)
             return str(raw)
         except ValueError:
             print("Please enter a valid string.")
@@ -157,7 +172,7 @@ def handle_stmt_add():
     amount=prompt_int("Amount (in cents):")
     s_type=type_choice()
     category_id = prompt_category()          # see below — needs its own helper
-    desc = prompt_string("Enter description: ")
+    desc = prompt_string("Enter description", default="")
     #Call db.py
     try:
         db.add_statement(s_date=date, s_amount=amount, s_category=category_id, s_desc=desc, s_type=s_type)
@@ -170,16 +185,17 @@ def handle_stmt_edit():
         id=prompt_int("Enter an ID")
         field=None
         while field not in db.VALID_FIELDS:
-            field=input(f"Enter a field to modify: {list(db.VALID_FIELDS)}: ")
+            #field=input(f"Enter a field to modify: {list(db.VALID_FIELDS)}: ").strip().lower()
+            field=prompt_choice("Enter a field to modify", [f for f in db.VALID_FIELDS])
         match field:
             case "date":
-                value=prompt_date("Enter Date: ", datetime.today().strftime("%Y-%m-%d %H:%M:%S"))
+                value=prompt_date("Enter Date", datetime.today().strftime("%Y-%m-%d %H:%M:%S"))
             case "amount":
-                value=prompt_int("Enter amount in cents: ")
+                value=prompt_int("Enter amount in cents")
             case "category":
                 value=prompt_category()
             case "description":
-                value=prompt_string("Enter new description: ")
+                value=prompt_string("Enter new description")
             case "type":
                 value=type_choice()
         x=db.change_statement(id, field, value)
@@ -194,23 +210,49 @@ def handle_stmt_del():
         return
     printRows(rows)
     
-    confirm = input("Delete this? (y/n): ").strip().lower()
+    confirm = Prompt.ask("Delete this? (y/n)", ).strip().lower()
     if confirm == "y":
         try:
             db.delete_statement(s_id)
             print("Deleted.")
         except (TypeError, ValueError, IntegrityError) as e:
             print(e)
+    elif confirm != "n":
+        print("Please enter 'y' or 'n'.")
+def handle_analytics():
+    rows = db.get_statements()
+    if not rows:
+        print("No statements to analyze.")
+        return
+    summary = analytics.monthly_summary(rows)
+    print(f"Monthly Summary:")
+    print(f"  Income: ${summary['income']/100:.2f}")
+    print(f"  Expense: ${summary['expense']/100:.2f}")
+    print(f"  Net: ${summary['net']/100:.2f}")
+
+    sc = analytics.spending_by_category(rows)
+    for s in sc:
+        fprint(f"{s:<20} --> [red]-${sc[s]/100:.2f}[/red]")
+def handle_export():
+    rows = db.get_statements()
+    if not rows:
+        print("No statements to save to a CSV.")
+        return
+    #get valid user filepath
+    filepath = prompt_string("Enter file path to save CSV", file_path=True)
+    export.export_csv(rows, filepath)
+
 def handle_categories():
     while True:
-        fprint("Options:\n\t1: View Categories\n\t2: Add Category\n\t3: Edit Category\n\t4: Delete Category\n\t5: Back")
+        #fprint("[bold purple]Options:[/bold purple]\n\t1: View Categories\n\t2: Add Category\n\t3: Edit Category\n\t4: Delete Category\n\t5: Back")
+        printMenus(items=["View Categories", "Add Categories", "Edit Categories", "Delete Category", "Back"])
         choice=input(">").strip()
         match choice:
             case "1":
                 rows = db.get_categories()
                 printRows(rows, "categories")
             case "2":
-                name=prompt_string("Enter category name.")
+                name=prompt_string("Enter category name")
                 try:
                     db.add_category(name)
                 except (TypeError, ValueError, IntegrityError) as e:
@@ -218,7 +260,7 @@ def handle_categories():
             case "3":
                 id=prompt_int("Enter category ID to edit", get_cid=True)
                 #Allow user to enter a category name or go back to handle_categories menu
-                new_name=prompt_string("Enter new category name.")
+                new_name=prompt_string("Enter new category name")
                 try:
                     db.change_category(id, new_name)
                 except (TypeError, ValueError, IntegrityError) as e:
@@ -233,7 +275,6 @@ def handle_categories():
                 break
             case _:
                 print("Please enter a valid number.")
-
 def printRows(rows, format="Statements"):
     if rows==None:
         raise TypeError("Row value is `None`.")
@@ -265,10 +306,15 @@ def printRows(rows, format="Statements"):
         console.print(table)
     else:
         print([tuple(row) for row in rows])
+def printMenus(title="Options", items=[]):
+    c=[f"[bold blue]#{i+1}:[/bold blue][right]{item}[/right]\n" for i, item in enumerate(items)]
+    fprint(Panel.fit("".join(c), title=f"[bold purple]{title}[/bold purple]", title_align="center"))
 #Main loop
 def main_menu():
     while True:
-        fprint("Options:\n\t1: View Statements\n\t2: Add Statement\n\t3: Edit Statement\n\t4: Delete Statement\n\t5: Categories\n\t6: Quit")
+        #fprint("""Options:\n\t1: View Statements\n\t2: Add Statement\n\t3: Edit Statement\n\t4: Delete Statement" \
+        #\n\t5: Categories\n\t6: Analytics\n\t7: Export to CSV\n\t8: Quit""")
+        printMenus(items=["View Statements", "Add Statement", "Edit Statement", "Delete Statement", "Categories", "Analytics", "Export to CSV", "Quit"])
         choice=input(">").strip()
         match choice:
             case "1":
@@ -282,6 +328,10 @@ def main_menu():
             case "5":
                 handle_categories()
             case "6":
+                handle_analytics()
+            case "7":
+                handle_export()
+            case "8":
                 break
             case _:
                 print("Please enter a valid number.")

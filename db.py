@@ -48,6 +48,9 @@ sql_statement={
     "select_by_category": """SELECT s.*, c.* FROM statements AS s
                          LEFT JOIN categories AS c ON s.category = c.id
                          WHERE s.category = ?""",
+     "select_by_category_null": """SELECT s.*, c.* FROM statements AS s
+                         LEFT JOIN categories AS c ON s.category = c.id
+                         WHERE s.category IS NULL""",
     "insert":"""INSERT INTO statements (date, amount, category, description, type) VALUES (?, ?, ?, ?, ?)""",
     "modify_date":        "UPDATE statements SET date = ? WHERE id = ?",
     "modify_amount":      "UPDATE statements SET amount = ? WHERE id = ?",
@@ -184,14 +187,19 @@ def get_statements(field="", value=None):
                 except ValueError:
                     raise ValueError("Error: Month must fit format '%Y-%m'")
             elif field=="category":
-                if not isinstance(value,int):
-                    raise TypeError("Error: Must enter integer for a category id number")
+                if value is None:
+                    query='select_by_category_null'
+                elif not isinstance(value,int):
+                    raise TypeError(f"Error: Must enter integer for a category id number: {value}")
                 elif value<0:
                     raise ValueError("Error: must enter positive valid category id number")
             value=(value,)
         else:
             value=()
-        cursor.execute(sql_statement[query],value)
+        if query!='select_by_category_null':
+            cursor.execute(sql_statement[query], value)
+        else:
+            cursor.execute(sql_statement[query])
         statements=cursor.fetchall()
     return statements
 def add_statement(s_date=None, s_amount=0, s_category=None, s_desc=None, s_type="expense"):

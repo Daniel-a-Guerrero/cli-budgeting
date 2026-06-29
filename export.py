@@ -3,6 +3,8 @@ Export layer — writes statement data to CSV files.
 
 Planned functions:
 - export_csv(rows, filepath) -> writes rows to filepath, returns success/failure
+
+Called by CLI layer
 """
 import csv
 

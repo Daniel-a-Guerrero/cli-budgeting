@@ -4,6 +4,7 @@ Run this file directly: `python main.py`
 """
 import db
 import cli
+import random
 
 if __name__ == "__main__":
     db.init_db()
